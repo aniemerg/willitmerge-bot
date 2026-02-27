@@ -1,0 +1,24 @@
+# Large data files
+dataset/prs.jsonl
+
+# Trained model artifacts
+models/
+
+# LLM feature cache
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
