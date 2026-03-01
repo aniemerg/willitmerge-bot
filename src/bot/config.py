@@ -85,7 +85,7 @@ def load_config() -> BotConfig:
     rng = random.Random(seed_raw if seed_raw else None)
 
     return BotConfig(
-        api_base_url=_str("BOT_API_BASE_URL", "http://127.0.0.1:8787"),
+        api_base_url=_str("BOT_API_BASE_URL", "https://pr-prediction-market-api-prod.niemerg.workers.dev"),
         api_key=os.environ.get("BOT_API_KEY") or None,
         github_token=os.environ.get("BOT_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or None,
         strategy=strategy,

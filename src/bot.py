@@ -8,7 +8,7 @@ Configuration via environment variables (BOT_* prefix).
 See .env.example for all available options.
 
 Key env vars:
-    BOT_API_BASE_URL           Market API endpoint (default: http://127.0.0.1:8787)
+    BOT_API_BASE_URL           Market API endpoint (default: https://pr-prediction-market-api-prod.niemerg.workers.dev)
     BOT_API_KEY                Bearer token for market API (optional)
     BOT_GITHUB_TOKEN           GitHub token for fetching live PR data
     BOT_STRATEGY               'openclaw' (default) or 'random'
