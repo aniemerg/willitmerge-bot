@@ -1,6 +1,6 @@
 # Will It Merge? Trading Bot
 
-A trading bot for [WillItMerge](https://willitmerge.com) prediction markets. It uses a
+A trading bot for [WillItMerge](https://willitmerge.pages.dev) prediction markets. It uses a
 LightGBM model trained on GitHub PR data to predict whether a pull request will merge
 within its deadline, then automatically buys and sells positions where the model disagrees
 with the market price.
@@ -51,7 +51,7 @@ Set these in your `.env` (see `.env.example` for all options):
 
 | Variable | Default | Description |
 |---|---|---|
-| `BOT_API_KEY` | — | WillItMerge API bearer token (required) |
+| `BOT_API_KEY` | — | WillItMerge API bearer token — get one at [willitmerge.pages.dev](https://willitmerge.pages.dev) → user menu → API keys |
 | `GITHUB_TOKEN` | — | GitHub token for live PR data (required) |
 | `BOT_DRY_RUN` | `true` | Set `false` for live trading |
 | `BOT_LOOP_MINUTES` | `10` | Minutes between cycles |
