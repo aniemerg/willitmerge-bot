@@ -1,142 +1,134 @@
-# openclaw-models
+# Will It Merge? Trading Bot
 
-LightGBM model predicting P(PR merged within deadline) for the openclaw/openclaw GitHub
-repository, paired with a Python trading bot that bets on WillItMerge prediction markets.
+A trading bot for [WillItMerge](https://willitmerge.com) prediction markets. It uses a
+LightGBM model trained on GitHub PR data to predict whether a pull request will merge
+within its deadline, then automatically buys and sells positions where the model disagrees
+with the market price.
 
----
+## Quick start
 
-## Model Performance (current)
-
-| Metric | Value |
-|---|---|
-| AUC-ROC | **0.9042** |
-| Calibrated log loss | **0.3115** |
-| Brier score | **0.1019** |
-| Baseline log loss | 0.5613 |
-| Training set | 5,319 PRs |
-| Validation set | 1,329 PRs |
-| Base rate (val) | 24.9% |
-
-Trained on fork PRs from openclaw/openclaw collected 2026-02-18. Deadline: 14 days.
-
----
-
-## Repository Structure
-
-```
-openclaw-models/
-  src/
-    features.py          — Feature extraction (Groups A–C + greptile)
-    author_history.py    — Group D: per-author prior accept rate (temporal)
-    llm_features.py      — Group E: LLM quality scores via gpt-5-nano
-    predict.py           — Inference: predict_pr(pr_dict) → float
-    train.py             — Training pipeline → models/
-    github_live.py       — Fetch live PR from GitHub GraphQL (for bot)
-    env.py               — Loads .env at import time
-    bot/
-      config.py          — BotConfig from BOT_* env vars
-      api.py             — WillItMerge REST client (httpx)
-      trade.py           — Trade sizing math
-      strategy.py        — OpenclawStrategy (ML) + RandomStrategy
-      loop.py            — Main trading loop
-      logger.py          — Colored terminal output
-    bot.py               — Bot entry point
-  models/
-    lgbm_model.pkl       — Trained LightGBM booster
-    calibrator.pkl       — Isotonic regression calibrator
-    metadata.json        — Feature names, hyperparams, val metrics
-  dataset/
-    prs.jsonl            — Raw PR data (not committed)
-    README.md            — Dataset schema documentation
-  analysis/
-    findings.md          — Data analysis and EDA findings
-  cache/
-    llm_features.json    — Cached LLM scores (persists across runs)
-```
-
----
-
-## Feature Groups
-
-| Group | Description | Features |
-|---|---|---|
-| A | At-creation | Title/body text stats, code change size, file types, author account age, branch prefix, labels, draft/milestone/assignee flags |
-| B | Post-creation | CI state & check counts, review states, comment/participant/reaction counts, review threads, greptile inline comment priority counts |
-| C | Time-aware | Hours/days open, fraction of deadline elapsed, hours remaining, last activity age |
-| D | Author history | Prior PR count, prior accept count, prior accept rate, is-first-PR flag |
-| E | LLM | 14 structured quality scores from gpt-5-nano (body structure, clarity, scope, tests, docs, etc.) |
-
-**Greptile features (Group B):** Greptile-apps posts automated code reviews with priority tags
-`[P0]`–`[P3]`. PRs with zero P0 issues merge at 14.3%; PRs with any P0 issues merge at 4–5%.
-Features: `greptile_p0_count`, `greptile_p1_count`, `greptile_p2_count`, `greptile_inline_count`.
-
----
-
-## Setup
+**Requirements:** Python 3.10+, a WillItMerge account, and a GitHub token.
 
 ```bash
+git clone <this-repo> && cd openclaw-models
 pip install -r requirements.txt
+
 cp .env.example .env
-# Edit .env — add OPENAI_API_KEY and GITHUB_TOKEN
+# Edit .env: fill in BOT_API_KEY and GITHUB_TOKEN
 ```
 
----
-
-## Training
+Run in dry-run mode (no real trades, safe to explore):
 
 ```bash
-python src/train.py
-# Options:
-#   --deadline 14      Merge deadline in days (default: 14)
-#   --no-llm           Skip LLM features (faster, lower AUC)
-#   --data dataset/prs.jsonl
-```
-
-Outputs `models/lgbm_model.pkl`, `models/calibrator.pkl`, `models/metadata.json`.
-
-LLM scores are cached in `cache/llm_features.json` and reused on subsequent runs.
-
----
-
-## Running the Bot
-
-```bash
-# Dry run (default — logs trades without executing)
 python src/bot.py
-
-# Live trading
-BOT_DRY_RUN=false python src/bot.py
-
-# Random strategy (no GitHub/OpenAI calls, for testing)
-BOT_STRATEGY=random python src/bot.py
 ```
 
-The bot uses `OpenclawStrategy` by default: fetches each PR live from GitHub, runs the ML
-pipeline, and trades when the model probability differs from the market price by more than
-`BOT_EDGE_THRESHOLD` (default 0.03).
+Enable live trading:
 
-### Key Bot Config (`.env`)
+```bash
+BOT_DRY_RUN=false python src/bot.py
+```
+
+The bot wakes every 10 minutes, fetches all open markets, scores each PR using the
+pre-trained model, and trades toward a target position wherever it finds edge.
+
+## How it works
+
+Each cycle has three phases:
+
+1. **Fetch** — GET all open markets from the API, fetch your current bankroll and positions
+2. **Score** — parallel GitHub + ML scoring of every market (ThreadPoolExecutor)
+3. **Trade** — walk results top-down by edge, execute trades to reach target position
+
+**Position sizing:** the bot doesn't blindly add to positions. It computes a target
+dollar amount per market based on edge strength and bankroll fraction, then trades only
+the delta needed to get there. If the model flips sides, it sells the wrong-side shares
+and buys the right side in the same cycle.
+
+## Configuration
+
+Set these in your `.env` (see `.env.example` for all options):
 
 | Variable | Default | Description |
 |---|---|---|
-| `BOT_API_BASE_URL` | `http://127.0.0.1:8787` | WillItMerge API endpoint |
-| `BOT_API_KEY` | — | WillItMerge API key |
-| `BOT_STRATEGY` | `openclaw` | `openclaw` or `random` |
-| `BOT_DRY_RUN` | `true` | `false` for live trading |
-| `BOT_LOOP_MINUTES` | `10` | Cycle interval |
-| `BOT_MARKETS_PER_CYCLE` | `10` | Markets evaluated per cycle |
-| `BOT_EDGE_THRESHOLD` | `0.03` | Minimum edge to trade |
-| `BOT_MAX_FRACTION_PER_MARKET` | `0.02` | Max bankroll fraction per trade |
-| `BOT_MAX_DOLLARS_PER_MARKET` | `25` | Hard cap per trade |
-| `GITHUB_TOKEN` | — | GitHub PAT for live PR fetching |
-| `OPENAI_API_KEY` | — | For LLM features |
+| `BOT_API_KEY` | — | WillItMerge API bearer token (required) |
+| `GITHUB_TOKEN` | — | GitHub token for live PR data (required) |
+| `BOT_DRY_RUN` | `true` | Set `false` for live trading |
+| `BOT_LOOP_MINUTES` | `10` | Minutes between cycles |
+| `BOT_EDGE_THRESHOLD` | `0.03` | Min probability edge to open/hold a position |
+| `BOT_MAX_TRADES_PER_CYCLE` | `5` | Max buys per cycle (live mode only) |
+| `BOT_MAX_SPEND_PER_CYCLE` | `50` | Max $ spent on buys per cycle (live mode only) |
+| `BOT_MAX_DOLLARS_PER_MARKET` | `25` | Hard dollar cap per position |
+| `BOT_MAX_FRACTION_PER_MARKET` | `0.02` | Max bankroll fraction per market |
+
+## The model
+
+Pre-trained model artifacts are included in `models/` — the bot works out of the box
+without any training step.
+
+**Performance:** AUC-ROC 0.9042 · calibrated log loss 0.3115 · Brier 0.1019  
+Trained on 5,319 fork PRs from the openclaw repository.
+
+Features are extracted in five groups:
+
+| Group | Description |
+|---|---|
+| A | At-creation signals: title/body stats, code size, branch prefix, labels, author age |
+| B | Post-creation signals: CI status, review state, comments, Greptile priority counts |
+| C | Time-aware: hours open, deadline fraction, activity recency |
+| D | Author history: prior PR count and acceptance rate (temporally correct, no leakage) |
+| E | LLM signals: 14 structured quality questions scored by gpt-5-nano |
+
+Greptile inline comments (Group B) are among the strongest predictors: PRs with zero
+P0 issues merge at ~14%; PRs with any P0 issues merge at ~4–5%.
 
 ---
 
-## Label Notes
+## Advanced: training your own model
 
-- **Fork PRs only** — same-repo maintainer PRs are excluded (86% accept rate vs 21% for forks).
-- **Local merges** — ~135 PRs closed on GitHub but cherry-picked to main are relabeled as
-  positive using comment-text detection.
-- **Deadline** — 14 days from PR creation. Open PRs past deadline are labeled negative.
-  PRs not yet past deadline at collection time are excluded from training.
+You'll need the dataset (`dataset/prs.jsonl`, ~93 MB) — see `dataset/README.md` for
+the schema and collection methodology.
+
+**Train:**
+
+```bash
+# With LLM features (requires OPENAI_API_KEY, costs ~$1–2)
+python src/train.py
+
+# Without LLM features (faster, slightly lower accuracy)
+python src/train.py --no-llm
+
+# Custom deadline window
+python src/train.py --deadline 30
+```
+
+**Evaluate:**
+
+```bash
+python src/evaluate.py   # prints metrics, saves calibration + feature importance plots
+```
+
+**Test inference on a single PR:**
+
+```bash
+python src/predict.py --pr-number 28378
+```
+
+### Source layout
+
+```
+src/
+├── bot/            trading bot (api, config, loop, scorer, display, trade)
+├── ml/             feature engineering library
+│   ├── features.py       Groups A/B/C feature extraction
+│   ├── author_history.py Group D: per-author temporal history
+│   └── llm_features.py   Group E: gpt-5-nano structured extraction + cache
+├── bot.py          entry point: python src/bot.py
+├── train.py        training pipeline
+├── evaluate.py     evaluation + calibration plots
+├── predict.py      inference function used by the bot
+└── github_live.py  live GitHub GraphQL fetch used by the bot
+
+scripts/
+└── discover_questions.py   one-time utility to generate LLM question set
+```

@@ -100,7 +100,7 @@ def plot_feature_importance(model, feature_names, top_n=30, save_path=None):
 def evaluate(data_path: Path | None = None):
     from sklearn.metrics import log_loss, roc_auc_score, brier_score_loss
     from train import load_and_filter, build_feature_matrix, time_split
-    from features import COLLECTION_DATE
+    from ml.features import COLLECTION_DATE
 
     model, calibrator, meta = load_artifacts()
     feat_names = meta["feature_names"]
@@ -110,8 +110,8 @@ def evaluate(data_path: Path | None = None):
         data_path = ROOT / "dataset" / "prs.jsonl"
 
     # Rebuild val set (same split as training)
-    from author_history import compute_author_history
-    from llm_features import precompute_llm_features
+    from ml.author_history import compute_author_history
+    from ml.llm_features import precompute_llm_features
 
     labeled_prs, all_fork_prs = load_and_filter(data_path, deadline_days)
     author_history = compute_author_history(all_fork_prs, deadline_days)

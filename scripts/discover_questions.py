@@ -157,7 +157,7 @@ def _call_pair(pair_idx: int, pr_a: dict, pr_b: dict) -> tuple[int, list[str] | 
 
 
 def run_stage1(data_path: Path, n_pairs: int = 50, max_workers: int = 50, budget_usd: float = 2.0):
-    from llm_features import INPUT_COST_PER_1K, OUTPUT_COST_PER_1K
+    from ml.llm_features import INPUT_COST_PER_1K, OUTPUT_COST_PER_1K
 
     # Load existing observations to support restart
     existing = {}
@@ -321,7 +321,7 @@ def run_stage2() -> list[dict]:
     usage = response.usage
     in_tok  = usage.prompt_tokens     if usage else 0
     out_tok = usage.completion_tokens if usage else 0
-    from llm_features import INPUT_COST_PER_1K, OUTPUT_COST_PER_1K
+    from ml.llm_features import INPUT_COST_PER_1K, OUTPUT_COST_PER_1K
     cost = (in_tok * INPUT_COST_PER_1K + out_tok * OUTPUT_COST_PER_1K) / 1000
     print(f"[stage2] {len(questions)} questions generated  "
           f"(tokens: {in_tok} in / {out_tok} out, cost: ${cost:.4f})")

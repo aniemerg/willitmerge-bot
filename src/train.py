@@ -26,14 +26,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import env  # loads .env
 
-from features import (
+from ml.features import (
     COLLECTION_DATE,
     apply_label_dropout,
     extract_features,
     get_feature_names,
 )
-from author_history import compute_author_history
-from llm_features import precompute_llm_features
+from ml.author_history import compute_author_history
+from ml.llm_features import precompute_llm_features
 
 
 def parse_dt(s):
@@ -133,7 +133,7 @@ def build_feature_matrix(
         "author_prior_pr_count", "author_prior_accept_count",
         "author_prior_accept_rate", "author_is_first_pr",
     ]
-    from llm_features import load_questions
+    from ml.llm_features import load_questions
     llm_feat_names = [f"llm_{q['id']}" for q in load_questions()]
     all_feat_names = feature_names_base + author_feat_names + llm_feat_names
 

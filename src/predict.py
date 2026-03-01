@@ -61,8 +61,8 @@ def predict_pr(
     Returns:
         Float in [0, 1] representing calibrated P(merged within deadline).
     """
-    from features import extract_features
-    from llm_features import get_llm_features
+    from ml.features import extract_features
+    from ml.llm_features import get_llm_features
 
     _load_artifacts()
 
@@ -89,7 +89,7 @@ def predict_pr(
     if use_llm:
         llm_feats = get_llm_features(pr)
     else:
-        from llm_features import load_questions
+        from ml.llm_features import load_questions
         llm_feats = {f"llm_{q['id']}": float("nan") for q in load_questions()}
 
     all_feats = {**base_feats, **author_history_feats, **llm_feats}
