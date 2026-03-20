@@ -48,7 +48,15 @@ def run_loop(config: "BotConfig", api: "ApiClient", strategy) -> None:
         try:
             # ── Phase 1: Fetch ────────────────────────────────────────────────
             markets = api.get_open_markets()
-            display.console.print(f"  [dim]{len(markets)} open markets fetched (prices live from chain)[/dim]")
+            live_count = sum(1 for m in markets if m.get("activation_state") == "live")
+            unactivated_count = sum(1 for m in markets if m.get("activation_state") == "unactivated")
+            activating_count = sum(1 for m in markets if m.get("activation_state") == "activating")
+            display.console.print(
+                f"  [dim]{len(markets)} open markets fetched"
+                f" · live={live_count}"
+                f" · unactivated={unactivated_count}"
+                f" · activating={activating_count}[/dim]"
+            )
 
             bankroll = config.default_bankroll
             try:
@@ -81,6 +89,7 @@ def run_loop(config: "BotConfig", api: "ApiClient", strategy) -> None:
 
                 results = score_all_markets(
                     markets=markets,
+                    api=api,
                     strategy=strategy,
                     bankroll=bankroll,
                     config=config,
@@ -105,7 +114,7 @@ def run_loop(config: "BotConfig", api: "ApiClient", strategy) -> None:
                 # Skip unscoreable markets
                 if result.edge is None or not result.plans:
                     continue
-                if not result.market.get("pools_seeded"):
+                if result.market.get("activation_state") == "activating":
                     continue
 
                 for plan in result.plans:
@@ -128,7 +137,11 @@ def run_loop(config: "BotConfig", api: "ApiClient", strategy) -> None:
                             if not op_id:
                                 raise ValueError(f"No operation_id in trade response: {init}")
 
-                            final = api.poll_trade_op(result.market["id"], op_id)
+                            final = api.poll_operation(
+                                result.market["id"],
+                                op_id,
+                                operation_kind=init.get("operation_kind", "trade"),
+                            )
 
                             if final.get("status") == "failed":
                                 raise ApiError(
@@ -138,9 +151,15 @@ def run_loop(config: "BotConfig", api: "ApiClient", strategy) -> None:
                                     status=200,
                                 )
 
-                            shares  = abs(float(init.get("shares", 0)))
-                            cost    = abs(float(init.get("cost",   0)))
-                            tx_hash = (final.get("tx_hashes") or {}).get("swap")
+                            filled_amount = final.get("amount", init.get("accepted_amount"))
+                            shares = (
+                                abs(float(filled_amount))
+                                if plan.action == "sell" and filled_amount is not None
+                                else None
+                            )
+                            cost = plan.max_cost if plan.action == "buy" else None
+                            tx_hashes = final.get("tx_hashes")
+                            tx_hash = tx_hashes.get("swap") if isinstance(tx_hashes, dict) else None
                             display.trade_placed(
                                 result.market, plan,
                                 filled_shares=shares,

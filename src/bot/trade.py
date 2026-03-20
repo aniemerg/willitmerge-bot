@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from bot.api import ApiClient
     from bot.config import BotConfig
 
 
@@ -28,22 +29,49 @@ class TradePlan:
     note: str
 
 
+@dataclass
+class TradeDecision:
+    plans: list[TradePlan]
+    reference_price: float | None
+    edge: float | None
+
+
+def _budget_cap(bankroll: float, config: "BotConfig") -> float:
+    return min(
+        config.max_dollars_per_market,
+        bankroll * config.max_fraction_per_market,
+    )
+
+
+def _strength(edge: float, threshold: float, max_edge: float) -> float:
+    if edge <= threshold or max_edge <= threshold:
+        return 0.0
+    return min(1.0, (edge - threshold) / (max_edge - threshold))
+
+
 def plan_trades_to_target(
     market: dict,
     target_prob: float,
     bankroll: float,
     config: "BotConfig",
+    api: "ApiClient",
     position: dict | None = None,
-) -> list[TradePlan]:
+) -> TradeDecision:
     """
-    Return the list of trades (0–2) needed to move from the current position
-    to the target position implied by target_prob.
+    Return the trades needed to move from the current position to the target
+    position implied by target_prob, plus the reference price used for edge.
 
     Sells always come before buys so the loop can execute them in order.
     """
+    activation_state = market.get("activation_state")
+    if activation_state == "activating":
+        return TradeDecision(plans=[], reference_price=None, edge=None)
+    if activation_state == "unactivated":
+        return _plan_activation_trade(market, target_prob, bankroll, config, api)
+
     raw_price = market.get("price_yes")
-    if raw_price is None:
-        return []
+    if raw_price is None or market.get("price_status") != "live":
+        return TradeDecision(plans=[], reference_price=None, edge=None)
     price_yes = float(raw_price)
     price_no  = 1.0 - price_yes
 
@@ -97,7 +125,7 @@ def plan_trades_to_target(
 
     # ── Trade toward target on the right side ─────────────────────────────────
     if target_side is None:
-        return plans  # nothing to buy; exits above are sufficient
+        return TradeDecision(plans=plans, reference_price=price_yes, edge=edge)
 
     current_dollars = current_yes_dollars if target_side == "yes" else current_no_dollars
     delta = target_dollars - current_dollars
@@ -123,4 +151,66 @@ def plan_trades_to_target(
                 note=f"trim {target_side.upper()}  {note_base} current=${current_dollars:.2f}",
             ))
 
-    return plans
+    return TradeDecision(plans=plans, reference_price=price_yes, edge=edge)
+
+
+def _plan_activation_trade(
+    market: dict,
+    target_prob: float,
+    bankroll: float,
+    config: "BotConfig",
+    api: "ApiClient",
+) -> TradeDecision:
+    """
+    Opening activation is BUY YES only. We size a candidate notional within the
+    configured risk budget, then quote that exact opening trade and compare the
+    model probability against the quoted post-open YES price.
+    """
+    opening_min = float(market.get("activation_min_opening_buy_xdai") or 0)
+    budget_cap = _budget_cap(bankroll, config)
+    confidence_edge = target_prob - 0.5
+
+    if target_prob <= 0.5 or confidence_edge < config.edge_threshold:
+        return TradeDecision(plans=[], reference_price=None, edge=None)
+    if opening_min <= 0 or budget_cap < opening_min:
+        return TradeDecision(plans=[], reference_price=None, edge=None)
+
+    strength = _strength(confidence_edge, config.edge_threshold, 0.5)
+    candidate_spend = max(opening_min, budget_cap * strength)
+    spend = min(budget_cap, candidate_spend)
+
+    quote = api.get_buy_quote(
+        market_id=market["id"],
+        side="yes",
+        xdai_in=spend,
+        strategy="mint_rebalance",
+    )
+    quoted_price = float(
+        quote.get("yesPriceAfter")
+        or quote.get("priceAfter")
+        or quote.get("priceBefore")
+        or 0
+    )
+    edge = target_prob - quoted_price
+    note_base = (
+        f"activation model={target_prob:.3f} quoted={quoted_price:.3f} "
+        f"edge={edge:+.3f} spend=${spend:.2f}"
+    )
+
+    if edge < config.edge_threshold:
+        return TradeDecision(plans=[], reference_price=quoted_price, edge=edge)
+
+    return TradeDecision(
+        plans=[
+            TradePlan(
+                action="buy",
+                side="yes",
+                max_cost=spend,
+                shares=0,
+                edge=edge,
+                note=f"open YES  {note_base}",
+            )
+        ],
+        reference_price=quoted_price,
+        edge=edge,
+    )

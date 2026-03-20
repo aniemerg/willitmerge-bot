@@ -2,12 +2,15 @@
 WillItMerge REST API client.
 
 Endpoints used:
-  GET  /markets?status=open&limit=100&page={n}  → paginated { markets, total, page }
-                                                   includes live on-chain price_yes/price_no
+  GET  /markets?status=open&limit=100&page={n}   → paginated { markets, total, page }
+                                                   cached list payload; prices are metadata only
+  GET  /markets/state?ids={id,...}               → live/synthetic price state for up to 100 markets
+  GET  /markets/{id}/quote                       → quote opening buys (used for unactivated markets)
   GET  /me                                       → account info including balance
   GET  /me/positions                             → current token holdings by market
   POST /markets/{id}/trade                       → start async trade operation
   GET  /markets/{id}/trade/ops/{op_id}           → poll async trade operation status
+  GET  /markets/{id}/activation/ops/{op_id}      → poll activation+trade operation status
 """
 
 from __future__ import annotations
@@ -65,10 +68,11 @@ class ApiClient:
 
     # ------------------------------------------------------------------
     def get_open_markets(self) -> list[dict]:
-        """Fetch all open markets (handles pagination).
+        """Fetch all open markets and hydrate current state.
 
         API response shape: { markets: [...], total: N, page: N }
-        Only returns markets with pools_seeded=True (untradeble markets skipped).
+        The list route is cached, so we overlay `/markets/state` to get the current
+        activation state and price fields before the bot scores anything.
         """
         markets: list[dict] = []
         page = 1
@@ -86,7 +90,44 @@ class ApiClient:
             if len(batch) < 100:
                 break
             page += 1
+        self._hydrate_market_states(markets)
         return markets
+
+    def _hydrate_market_states(self, markets: list[dict]) -> None:
+        market_ids = [m.get("id") for m in markets if m.get("id")]
+        if not market_ids:
+            return
+        try:
+            states = self.get_market_states(market_ids)
+        except Exception:
+            return
+        for market in markets:
+            state = states.get(market.get("id", ""))
+            if not state:
+                continue
+            market.update({
+                "activation_state": state.get("activation_state", market.get("activation_state")),
+                "price_yes": state.get("price_yes", market.get("price_yes")),
+                "price_no": state.get("price_no", market.get("price_no")),
+                "price_status": state.get("price_status", market.get("price_status")),
+            })
+
+    def get_market_states(self, market_ids: list[str]) -> dict[str, dict]:
+        """Fetch live state for up to 100 markets per request."""
+        states: dict[str, dict] = {}
+        for start in range(0, len(market_ids), 100):
+            batch = market_ids[start:start + 100]
+            resp = self._client.get(
+                f"{self._base}/markets/state",
+                params={"ids": ",".join(batch)},
+            )
+            _raise_for_status(resp)
+            data = resp.json()
+            for state in data.get("states", []):
+                market_id = state.get("market_id")
+                if market_id:
+                    states[market_id] = state
+        return states
 
     def get_me(self) -> dict:
         """Fetch the authenticated user's account info (balance as formatted ether string)."""
@@ -139,15 +180,35 @@ class ApiClient:
         _raise_for_status(resp)
         return resp.json()
 
-    def poll_trade_op(
+    def get_buy_quote(
+        self,
+        market_id: str,
+        side: str,
+        xdai_in: float,
+        strategy: str = "pool_direct",
+    ) -> dict:
+        """Fetch a buy quote for the given notional size."""
+        resp = self._client.get(
+            f"{self._base}/markets/{market_id}/quote",
+            params={
+                "side": side,
+                "strategy": strategy,
+                "xdaiIn": f"{xdai_in:.6f}",
+            },
+        )
+        _raise_for_status(resp)
+        return resp.json()
+
+    def poll_operation(
         self,
         market_id: str,
         operation_id: str,
+        operation_kind: str = "trade",
         poll_interval: float = 2.0,
         timeout: float = 60.0,
     ) -> dict:
         """
-        Poll GET /markets/{id}/trade/ops/{op_id} until the operation reaches a
+        Poll the appropriate operation endpoint until the operation reaches a
         terminal state (completed or failed), then return the final state.
 
         Raises:
@@ -155,11 +216,14 @@ class ApiClient:
                       past timeout.
             TimeoutError: if the operation doesn't complete within `timeout` seconds.
         """
+        path = (
+            f"/markets/{market_id}/activation/ops/{operation_id}"
+            if operation_kind == "activation_and_trade"
+            else f"/markets/{market_id}/trade/ops/{operation_id}"
+        )
         deadline = time.monotonic() + timeout
         while True:
-            resp = self._client.get(
-                f"{self._base}/markets/{market_id}/trade/ops/{operation_id}"
-            )
+            resp = self._client.get(f"{self._base}{path}")
             _raise_for_status(resp)
             state = resp.json()
             status = state.get("status")

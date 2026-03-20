@@ -52,6 +52,17 @@ def _cents(value: float | None) -> str:
     return f"{value * 100:.0f}¢"
 
 
+def _market_state(market: dict) -> str:
+    activation_state = market.get("activation_state")
+    if activation_state == "unactivated":
+        return "unactivated"
+    if activation_state == "activating":
+        return "activating"
+    if market.get("price_status") != "live":
+        return str(market.get("price_status") or "unavailable")
+    return "live"
+
+
 # ── startup banner ────────────────────────────────────────────────────────────
 
 def startup_banner(strategy_name: str, loop_minutes: int, dry_run: bool,
@@ -151,7 +162,7 @@ def opportunity_table(
     for result in scoreable[:top_n]:
         label = _market_label(result.market)
         model_str = _cents(result.target_prob)
-        price_str = _cents(result.market.get("price_yes"))
+        price_str = _cents(result.reference_price)
 
         edge_val = result.edge or 0.0
         abs_edge = abs(edge_val)
@@ -165,8 +176,12 @@ def opportunity_table(
         # Determine decision
         if result.abs_edge is None or result.abs_edge < edge_threshold:
             decision = Text("below threshold", style=_DIM)
-        elif not result.market.get("pools_seeded"):
-            decision = Text("pools not seeded", style=_DIM)
+        elif result.market.get("activation_state") == "activating":
+            decision = Text("market activating", style=_YELLOW)
+        elif result.market.get("activation_state") == "unactivated" and not result.plans:
+            decision = Text("unactivated: no opening edge", style=_DIM)
+        elif _market_state(result.market) != "live" and not result.plans:
+            decision = Text(f"state: {_market_state(result.market)}", style=_DIM)
         elif not result.plans:
             decision = Text("at target", style=_DIM)
         else:
@@ -246,8 +261,9 @@ def trade_placed(market: dict, plan, filled_shares: float | None,
 
 def trade_failed(market: dict, plan, error: str) -> None:
     label = _market_label(market)
+    action = "BUY" if plan.action == "buy" else "SELL"
     console.print(
-        f"  [bold red][error][/bold red]   {label}  BUY {plan.side.upper()}  {error}",
+        f"  [bold red][error][/bold red]   {label}  {action} {plan.side.upper()}  {error}",
         style=_RED,
     )
 

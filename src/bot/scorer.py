@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from bot.api import ApiClient
     from bot.config import BotConfig
     from bot.trade import TradePlan
 
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 class ScoredMarket:
     market: dict
     target_prob: float | None
+    reference_price: float | None
     edge: float | None          # signed: model_prob - price_yes
     abs_edge: float | None
     plans: list["TradePlan"] = field(default_factory=list)
@@ -29,6 +31,7 @@ class ScoredMarket:
 
 def score_all_markets(
     markets: list[dict],
+    api: "ApiClient",
     strategy,
     bankroll: float,
     config: "BotConfig",
@@ -61,34 +64,32 @@ def score_all_markets(
             if target is None:
                 return ScoredMarket(
                     market=market,
-                    target_prob=None, edge=None, abs_edge=None,
+                    target_prob=None, reference_price=None, edge=None, abs_edge=None,
                 )
-
-            raw_price = market.get("price_yes")
-            if raw_price is None:
-                return ScoredMarket(
-                    market=market,
-                    target_prob=target, edge=None, abs_edge=None,
-                    error="price unavailable",
-                )
-
-            price = float(raw_price)
-            edge  = target - price
             position = positions.get(market.get("id", ""))
-
-            plans = plan_trades_to_target(market, target, bankroll, config, position)
+            decision = plan_trades_to_target(
+                market=market,
+                target_prob=target,
+                bankroll=bankroll,
+                config=config,
+                api=api,
+                position=position,
+            )
+            edge = decision.edge
+            plans = decision.plans
 
             return ScoredMarket(
                 market=market,
                 target_prob=target,
+                reference_price=decision.reference_price,
                 edge=edge,
-                abs_edge=abs(edge),
+                abs_edge=abs(edge) if edge is not None else None,
                 plans=plans,
             )
         except Exception as exc:
             return ScoredMarket(
                 market=market,
-                target_prob=None, edge=None, abs_edge=None,
+                target_prob=None, reference_price=None, edge=None, abs_edge=None,
                 error=str(exc),
             )
 

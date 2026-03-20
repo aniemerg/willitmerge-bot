@@ -29,14 +29,15 @@ Enable live trading:
 BOT_DRY_RUN=false python src/bot.py
 ```
 
-The bot wakes every 10 minutes, fetches all open markets, scores each PR using the
-pre-trained model, and trades toward a target position wherever it finds edge.
+The bot wakes every 10 minutes, fetches all open markets, hydrates current market state,
+scores each PR using the pre-trained model, and trades toward a target position wherever
+it finds edge.
 
 ## How it works
 
 Each cycle has three phases:
 
-1. **Fetch** — GET all open markets from the API, fetch your current bankroll and positions
+1. **Fetch** — GET all open markets, then hydrate live market state via `/markets/state`
 2. **Score** — parallel GitHub + ML scoring of every market (ThreadPoolExecutor)
 3. **Trade** — walk results top-down by edge, execute trades to reach target position
 
@@ -44,6 +45,11 @@ Each cycle has three phases:
 dollar amount per market based on edge strength and bankroll fraction, then trades only
 the delta needed to get there. If the model flips sides, it sells the wrong-side shares
 and buys the right side in the same cycle.
+
+**Activation-aware trading:** open markets can now be `live`, `unactivated`, or
+`activating`. For unactivated markets the bot only considers opening `BUY YES` trades,
+quotes the opening activation path before trading, and polls the activation operation
+endpoint when needed.
 
 ## Configuration
 
